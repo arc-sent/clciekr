@@ -2,6 +2,7 @@ import asyncio
 import os
 import datetime
 import subprocess
+import logging
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -9,6 +10,18 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 load_dotenv()
 BOT_TOKEN = os.getenv('BOT_TOKEN', '')
 OWNER_ID = int(os.getenv('OWNER_ID', 0))
+DEBUG = os.getenv('DEBUG', '0') == '1'
+
+logging.basicConfig(
+    level=logging.DEBUG if DEBUG else logging.WARNING,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+)
+log = logging.getLogger('bot')
+
+
+def dbg(msg: str):
+    if DEBUG:
+        print(f'[DBG] {msg}')
 
 swiper_process = None
 start_time = None
@@ -24,7 +37,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     global swiper_process, start_time, like_count
 
+    dbg(f'cmd_start от {update.effective_user.id}')
     if swiper_process and swiper_process.poll() is None:
+        dbg('свайпер уже запущен, pid=' + str(swiper_process.pid))
         await update.message.reply_text('Уже запущен.')
         return
 
@@ -38,6 +53,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cwd=os.path.dirname(os.path.abspath(__file__)),
     )
 
+    dbg(f'свайпер запущен, pid={swiper_process.pid}')
     asyncio.create_task(monitor_output(context))
     await update.message.reply_text('Запущен! Используй /status или /stop.')
 
@@ -51,8 +67,10 @@ async def monitor_output(context: ContextTypes.DEFAULT_TYPE):
         if not line:
             break
         line = line.strip()
+        dbg(f'свайпер: {line}')
         if 'API LIKE → OK' in line:
             like_count += 1
+            dbg(f'лайк засчитан, всего={like_count}')
         if '[!]' in line or 'Ошибка' in line:
             await context.bot.send_message(
                 chat_id=OWNER_ID,
@@ -71,11 +89,14 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     global swiper_process
 
+    dbg(f'cmd_stop от {update.effective_user.id}')
     if not swiper_process or swiper_process.poll() is not None:
+        dbg('свайпер не запущен')
         await update.message.reply_text('Не запущен.')
         return
 
     swiper_process.terminate()
+    dbg('свайпер остановлен')
     swiper_process = None
     await update.message.reply_text('Остановлен.')
 
