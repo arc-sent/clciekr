@@ -1,0 +1,7 @@
+services:
+  swiper:
+    build: .
+    env_file: .env
+    volumes:
+      - ./ashqua_session.session:/app/ashqua_session.session
+    restart: unless-stopped
