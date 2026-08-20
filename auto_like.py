@@ -49,13 +49,32 @@ async def auth(init_data: str) -> dict:
         r.raise_for_status()
         sid = r.json().get('d', {}).get('sid', '')
 
-        # Авторизуемся через Telegram initData
+        print(f'[DEBUG] init_data preview: {init_data[:100]}')
+
+        # Пробуем GET с заголовками
         r2 = await client.get(
             '/auth/telegram',
             headers={'x-telegram': init_data, 'x-session': sid},
         )
-        print(f'[DEBUG] auth/telegram: {r2.status_code} {r2.text[:300]}')
-        r2.raise_for_status()
+        print(f'[DEBUG] GET auth/telegram: {r2.status_code} {r2.text[:300]}')
+
+        # Если 404 — пробуем POST с телом
+        if r2.json().get('e'):
+            r2 = await client.post(
+                '/auth/telegram',
+                json={'initData': init_data, 'sid': sid},
+                headers={'x-session': sid},
+            )
+            print(f'[DEBUG] POST auth/telegram json: {r2.status_code} {r2.text[:300]}')
+
+        if r2.json().get('e'):
+            r2 = await client.post(
+                '/auth/telegram',
+                content=init_data,
+                headers={'x-session': sid, 'content-type': 'text/plain'},
+            )
+            print(f'[DEBUG] POST auth/telegram plain: {r2.status_code} {r2.text[:300]}')
+
         data = r2.json().get('d', {})
         return data
 
