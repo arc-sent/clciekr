@@ -1,3 +1,4 @@
 telethon
 playwright
 python-dotenv
+python-telegram-bot==20.7
