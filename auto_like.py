@@ -66,7 +66,7 @@ async def get_feed(client: httpx.AsyncClient, exclude: list) -> list:
     return r.json().get('d', [])
 
 
-async def like(client: httpx.AsyncClient, target_id: str) -> str | None:
+async def like(client: httpx.AsyncClient, target_id: str):
     r = await client.post('/reaction/like', json={'target': target_id})
     r.raise_for_status()
     data = r.json()
