@@ -13,9 +13,12 @@ OWNER_ID = int(os.getenv('OWNER_ID', 0))
 DEBUG = os.getenv('DEBUG', '0') == '1'
 
 logging.basicConfig(
-    level=logging.DEBUG if DEBUG else logging.WARNING,
+    level=logging.WARNING,
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
 )
+# Глушим шумные библиотеки даже в debug-режиме
+for _noisy in ('httpcore', 'httpx', 'telegram', 'asyncio'):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 log = logging.getLogger('bot')
 
 
