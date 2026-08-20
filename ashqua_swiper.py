@@ -140,11 +140,35 @@ async def auto_like(webapp_url: str):
             }};
         """)
 
-        # Перехватываем ответы API для логирования
+        # Перехватываем ВСЕ запросы для логирования auth
         like_log = []
+        auth_logged = False
+
+        async def on_request(request):
+            nonlocal auth_logged
+            url = request.url
+            if 'ashqua' in url and not auth_logged:
+                print(f'[REQ] {request.method} {url}')
+                hdrs = dict(request.headers)
+                for k, v in hdrs.items():
+                    if k.lower() in ('x-telegram', 'x-session', 'authorization', 'content-type'):
+                        print(f'      {k}: {v[:80]}')
+                body = request.post_data
+                if body:
+                    print(f'      body: {str(body)[:200]}')
 
         async def on_response(response):
+            nonlocal auth_logged
             url = response.url
+            if 'ashqua' in url and not auth_logged:
+                try:
+                    body = await response.text()
+                    print(f'[RES] {response.status} {url}')
+                    print(f'      {body[:200]}')
+                    if 'auth' in url:
+                        auth_logged = True
+                except Exception:
+                    pass
             if 'reaction/like' in url or 'reaction/dislike' in url or 'feed' in url:
                 try:
                     body = await response.json()
@@ -159,6 +183,7 @@ async def auto_like(webapp_url: str):
                 except Exception:
                     pass
 
+        page.on('request', on_request)
         page.on('response', on_response)
 
         print('[*] Открываю приложение...')
