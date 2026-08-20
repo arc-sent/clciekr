@@ -27,7 +27,7 @@ async def get_init_data() -> str:
     fragment = result.url.split('#')[1] if '#' in result.url else ''
     params = urllib.parse.parse_qs(fragment)
     raw = params.get('tgWebAppData', [''])[0]
-    return urllib.parse.unquote(raw)
+    return raw  # оставляем URL-encoded для передачи в заголовке
 
 
 def make_client(token: str) -> httpx.AsyncClient:
