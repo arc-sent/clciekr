@@ -60,13 +60,18 @@ async def auto_like(webapp_url: str):
                 '--no-sandbox',
                 '--disable-dev-shm-usage',
                 '--disable-gpu',
+                '--disable-blink-features=AutomationControlled',
             ]
         )
 
         context = await browser.new_context(
             **pixel5,
             ignore_https_errors=True,
+            extra_http_headers={
+                'Accept-Language': 'ru-RU,ru;q=0.9',
+            }
         )
+        await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
         page = await context.new_page()
 
@@ -187,7 +192,7 @@ async def auto_like(webapp_url: str):
         page.on('response', on_response)
 
         print('[*] Открываю приложение...')
-        await page.goto(webapp_url, wait_until='domcontentloaded', timeout=60000)
+        await page.goto(webapp_url, wait_until='commit', timeout=60000)
         await page.wait_for_timeout(4000)
 
         print('[*] Ищу карточку профиля...')
