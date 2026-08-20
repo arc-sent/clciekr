@@ -52,11 +52,14 @@ async def auto_like(webapp_url: str):
         pixel5 = p.devices['Pixel 5']
 
         browser = await p.chromium.launch(
-            headless=False,
+            headless=True,
             args=[
                 '--ignore-certificate-errors',
                 '--disable-web-security',
                 '--allow-insecure-localhost',
+                '--no-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
             ]
         )
 
