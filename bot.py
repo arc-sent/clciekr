@@ -71,7 +71,7 @@ async def monitor_output(context: ContextTypes.DEFAULT_TYPE):
             break
         line = line.strip()
         dbg(f'свайпер: {line}')
-        if 'API LIKE → OK' in line:
+        if '| tap →' in line:
             like_count += 1
             dbg(f'лайк засчитан, всего={like_count}')
         if '[!]' in line or 'Ошибка' in line:
