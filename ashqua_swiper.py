@@ -27,7 +27,7 @@ async def get_webapp_url() -> str:
     return result.url
 
 
-def parse_init_data(webapp_url: str) -> tuple[str, dict]:
+def parse_init_data(webapp_url: str):
     fragment = webapp_url.split('#')[1] if '#' in webapp_url else ''
     params = urllib.parse.parse_qs(fragment)
     raw = urllib.parse.unquote(params.get('tgWebAppData', [''])[0])
