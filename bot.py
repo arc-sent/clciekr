@@ -1,11 +1,13 @@
 import asyncio
 import os
+import signal
+import subprocess
 import random
 import datetime
-import subprocess
 import logging
 from dotenv import load_dotenv
 from telegram import Update
+from telegram.error import NetworkError
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 load_dotenv()
@@ -13,12 +15,13 @@ BOT_TOKEN = os.getenv('BOT_TOKEN', '')
 OWNER_ID = int(os.getenv('OWNER_ID', 0))
 DEBUG = os.getenv('DEBUG', '0') == '1'
 
-# Расписание: 3 старта в сутки (HH:MM), длительность ~2.5ч ± случайный разброс
-SCHEDULE_STARTS = [
-    s.strip() for s in os.getenv('SCHEDULE', '10:00,15:00,20:00').split(',')
-]
-SESSION_DURATION_MIN = int(os.getenv('SESSION_DURATION', '150'))  # минут
-SESSION_JITTER_MIN = int(os.getenv('SESSION_JITTER', '15'))       # ± минут
+SCHEDULE_STARTS = [s.strip() for s in os.getenv('SCHEDULE', '10:00,15:00,20:00').split(',')]
+SESSION_DURATION_MIN = int(os.getenv('SESSION_DURATION', '150'))
+SESSION_JITTER_MIN = int(os.getenv('SESSION_JITTER', '15'))
+
+SWIPER_DIR = os.path.dirname(os.path.abspath(__file__))
+SWIPER_PID_FILE = os.path.join(SWIPER_DIR, 'swiper.pid')
+SWIPER_LOG_FILE = os.path.join(SWIPER_DIR, 'swiper.log')
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -33,10 +36,24 @@ def dbg(msg: str):
         print(f'[DBG] {msg}')
 
 
-swiper_process = None
-session_start_time = None
+session_start_time: datetime.datetime | None = None
 like_count = 0
-auto_mode = False  # включён ли автоматический режим по расписанию
+auto_mode = False
+_stopping = False  # флаг намеренной остановки
+
+
+def swiper_pid() -> int | None:
+    """Возвращает PID свайпера если он живой, иначе None."""
+    try:
+        pid = int(open(SWIPER_PID_FILE).read().strip())
+        os.kill(pid, 0)  # проверка: процесс существует
+        return pid
+    except Exception:
+        return None
+
+
+def is_running() -> bool:
+    return swiper_pid() is not None
 
 
 def is_owner(update: Update) -> bool:
@@ -44,22 +61,30 @@ def is_owner(update: Update) -> bool:
 
 
 async def start_swiper(context, notify=True):
-    global swiper_process, session_start_time, like_count
+    global session_start_time, like_count, _stopping
 
-    if swiper_process and swiper_process.poll() is None:
+    if is_running():
         dbg('свайпер уже запущен')
         return False
 
+    _stopping = False
     like_count = 0
     session_start_time = datetime.datetime.now()
-    swiper_process = subprocess.Popen(
+
+    log_f = open(SWIPER_LOG_FILE, 'w')
+    proc = subprocess.Popen(
         ['python3', 'ashqua_swiper.py'],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        cwd=os.path.dirname(os.path.abspath(__file__)),
+        stdout=log_f,
+        stderr=log_f,
+        start_new_session=True,   # отвязываем от группы процессов бота
+        cwd=SWIPER_DIR,
     )
-    dbg(f'свайпер запущен, pid={swiper_process.pid}')
+    log_f.close()  # родителю fd не нужен, дочерний процесс держит свой
+
+    with open(SWIPER_PID_FILE, 'w') as f:
+        f.write(str(proc.pid))
+
+    dbg(f'свайпер запущен, pid={proc.pid}')
     asyncio.create_task(monitor_output(context))
 
     if notify:
@@ -68,15 +93,25 @@ async def start_swiper(context, notify=True):
 
 
 async def stop_swiper(context, notify=True, reason=''):
-    global swiper_process
+    global _stopping
 
-    if not swiper_process or swiper_process.poll() is not None:
+    pid = swiper_pid()
+    if not pid:
         dbg('свайпер не запущен')
         return False
 
-    swiper_process.terminate()
-    swiper_process = None
-    dbg('свайпер остановлен')
+    _stopping = True  # сначала флаг, потом убиваем — monitor не пошлёт "упал"
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        os.remove(SWIPER_PID_FILE)
+    except FileNotFoundError:
+        pass
+
+    dbg(f'свайпер остановлен (pid={pid})')
 
     if notify:
         msg = f'Свайпер остановлен. {reason}\nЛайков за сеанс: {like_count}'
@@ -85,33 +120,50 @@ async def stop_swiper(context, notify=True, reason=''):
 
 
 async def monitor_output(context):
+    """Читает swiper.log и считает лайки. Независим от жизни процесса."""
     global like_count
-    while swiper_process and swiper_process.poll() is None:
-        line = await asyncio.get_event_loop().run_in_executor(
-            None, swiper_process.stdout.readline
-        )
-        if not line:
-            break
-        line = line.strip()
-        dbg(f'свайпер: {line}')
-        if '| tap →' in line:
-            like_count += 1
-            dbg(f'лайк засчитан, всего={like_count}')
-        if '[!]' in line or 'Ошибка' in line:
-            await context.bot.send_message(
-                chat_id=OWNER_ID,
-                text=f'Предупреждение: {line}',
-            )
+    log_pos = 0
 
-    if swiper_process and swiper_process.returncode not in (None, 0, -15):
+    while True:
+        await asyncio.sleep(1)
+
+        try:
+            with open(SWIPER_LOG_FILE) as f:
+                f.seek(log_pos)
+                lines = f.readlines()
+                log_pos = f.tell()
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                dbg(f'свайпер: {line}')
+                if '| tap →' in line:
+                    like_count += 1
+                    dbg(f'лайк засчитан, всего={like_count}')
+                if '[!]' in line or 'Ошибка' in line:
+                    await context.bot.send_message(
+                        chat_id=OWNER_ID,
+                        text=f'Предупреждение: {line}',
+                    )
+        except FileNotFoundError:
+            pass
+
+        if not is_running():
+            break
+
+    # Свайпер завершился — упал или был остановлен намеренно?
+    if not _stopping:
         await context.bot.send_message(
             chat_id=OWNER_ID,
-            text='Свайпер завершился с ошибкой. Используй /start чтобы перезапустить.',
+            text='Свайпер завершился неожиданно. Используй /start для перезапуска.',
         )
+        try:
+            os.remove(SWIPER_PID_FILE)
+        except FileNotFoundError:
+            pass
 
 
 async def scheduler_loop(context):
-    """Каждую минуту проверяет расписание и запускает/останавливает свайпер."""
     while True:
         await asyncio.sleep(60)
         if not auto_mode:
@@ -129,7 +181,7 @@ async def scheduler_loop(context):
                 if started:
                     await context.bot.send_message(
                         chat_id=OWNER_ID,
-                        text=f'Авто-сеанс {start_str} — длительность {duration} мин.'
+                        text=f'Авто-сеанс {start_str} — длительность {duration} мин.',
                     )
                     asyncio.create_task(auto_stop_after(context, duration))
                 break
@@ -166,7 +218,6 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_auto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Включить/выключить автоматический режим по расписанию."""
     if not is_owner(update):
         return
     global auto_mode
@@ -185,14 +236,18 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update):
         return
 
-    running = swiper_process and swiper_process.poll() is None
-    elapsed = str(datetime.datetime.now() - session_start_time).split('.')[0] if session_start_time and running else '—'
+    running = is_running()
+    elapsed = (
+        str(datetime.datetime.now() - session_start_time).split('.')[0]
+        if session_start_time and running else '—'
+    )
     auto_str = 'вкл' if auto_mode else 'выкл'
     schedule_info = ', '.join(SCHEDULE_STARTS)
+    pid = swiper_pid()
 
     if running:
         await update.message.reply_text(
-            f'Статус: работает\n'
+            f'Статус: работает (pid={pid})\n'
             f'Лайков: {like_count}\n'
             f'Время работы: {elapsed}\n'
             f'Авторежим: {auto_str} ({schedule_info})'
@@ -205,7 +260,6 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать расписание следующих сеансов."""
     if not is_owner(update):
         return
     now = datetime.datetime.now()
@@ -235,6 +289,13 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    if isinstance(context.error, NetworkError):
+        dbg(f'сетевая ошибка (автоповтор): {context.error}')
+        return
+    logging.getLogger(__name__).error('Unhandled exception', exc_info=context.error)
+
+
 async def post_init(app):
     asyncio.create_task(scheduler_loop(app))
 
@@ -247,6 +308,7 @@ def main():
     app.add_handler(CommandHandler('schedule', cmd_schedule))
     app.add_handler(CommandHandler('status', cmd_status))
     app.add_handler(CommandHandler('help', cmd_help))
+    app.add_error_handler(error_handler)
     print('[*] Бот запущен...')
     app.run_polling()
 
