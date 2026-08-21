@@ -36,13 +36,13 @@ def dbg(msg: str):
         print(f'[DBG] {msg}')
 
 
-session_start_time: datetime.datetime | None = None
+session_start_time = None
 like_count = 0
 auto_mode = False
 _stopping = False  # флаг намеренной остановки
 
 
-def swiper_pid() -> int | None:
+def swiper_pid():
     """Возвращает PID свайпера если он живой, иначе None."""
     try:
         pid = int(open(SWIPER_PID_FILE).read().strip())
