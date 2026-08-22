@@ -123,9 +123,11 @@ async def monitor_output(context):
     """Читает swiper.log и считает лайки. Независим от жизни процесса."""
     global like_count
     log_pos = 0
+    pending_errors = []
+    last_error_flush = datetime.datetime.now()
 
     while True:
-        await asyncio.sleep(1)
+        await asyncio.sleep(2)
 
         try:
             with open(SWIPER_LOG_FILE) as f:
@@ -140,13 +142,22 @@ async def monitor_output(context):
                 if '| tap →' in line:
                     like_count += 1
                     dbg(f'лайк засчитан, всего={like_count}')
-                if '[!]' in line or 'Ошибка' in line:
-                    await context.bot.send_message(
-                        chat_id=OWNER_ID,
-                        text=f'Предупреждение: {line}',
-                    )
+                elif '[!]' in line or 'Ошибка' in line:
+                    pending_errors.append(line)
         except FileNotFoundError:
             pass
+
+        # Шлём ошибки батчом не чаще раза в 60 секунд
+        now = datetime.datetime.now()
+        if pending_errors and (now - last_error_flush).total_seconds() >= 60:
+            batch = pending_errors[:5]
+            pending_errors.clear()
+            last_error_flush = now
+            text = 'Предупреждения свайпера:\n' + '\n'.join(f'• {l}' for l in batch)
+            try:
+                await context.bot.send_message(chat_id=OWNER_ID, text=text)
+            except Exception:
+                pass
 
         if not is_running():
             break

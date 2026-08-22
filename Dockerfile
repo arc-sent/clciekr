@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/playwright/python:v1.47.0-jammy
+FROM mcr.microsoft.com/playwright/python:v1.54.0-jammy
 
 WORKDIR /app
 
@@ -7,5 +7,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN playwright install chromium
 
 COPY *.py .
+COPY .env* ./
 
-CMD ["python", "ashqua_swiper.py"]
+CMD ["python3", "bot.py"]
